@@ -1,0 +1,21 @@
+{
+  "name": "spid-storage-configuration-redis",
+  "version": "0.0.0",
+  "description": "[Plugin] Spid Redis Configuration Storage",
+  "main": "RedisConfigurationStorage.js",
+  "author": "Francois-Guillaume Ribreau <npm@fgribreau.com> (http://fgribreau.com/)",
+  "license": "MIT",
+  "dependencies": {
+    "async": "^0.9.0",
+    "lodash": "^2.4.1",
+    "redis": "^0.12.1",
+    "spid-storage-configuration-interface": "0.0.1"
+  },
+  "scripts": {
+    "test": "mocha test/*"
+  },
+  "devDependencies": {
+    "chai": "^1.9.1",
+    "mocha": "^1.21.4"
+  }
+}
