@@ -24,7 +24,9 @@ describe('RedisConfigurationStorage', function () {
   });
 
   it('default configuration should be available', function (f) {
-    storage.init(configuration, _.noop);
+    storage.init(configuration, function(err){
+      if(err){throw err;}
+    });
 
     t.strictEqual(configuration.test.params.port, 6379);
     t.strictEqual(configuration.test.params.host, '127.0.0.1');
@@ -45,7 +47,8 @@ describe('RedisConfigurationStorage', function () {
   describe('once connected', function () {
     beforeEach(function (f) {
       // init config
-      storage.init(configuration, function (){
+      storage.init(configuration, function (err){
+        if(err){throw err;}
         storage._client.flushdb(function(){
           f();
         });
