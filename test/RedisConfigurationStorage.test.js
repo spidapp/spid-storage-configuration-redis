@@ -86,6 +86,10 @@ describe('RedisConfigurationStorage', function () {
 
     describe('.remove', function () {
       it('should be able to remove a non-existent key', function (f) {
+        storage.watch([KEY], function(key, newValue){
+          throw new Error("Should not be called");
+        });
+
         storage.remove(KEY, function(err){
           t.strictEqual(err, null);
           f();
@@ -93,10 +97,15 @@ describe('RedisConfigurationStorage', function () {
       });
 
       it('should be able to remove a key', function (f) {
+        storage.watch([KEY], function(key, newValue){
+          t.strictEqual(key, KEY);
+          t.strictEqual(newValue, VALUE);
+          f();
+        });
+
         storage.write(KEY, VALUE, function(err, value){
           storage.remove(KEY, function(err){
             t.strictEqual(err, null);
-            f();
           });
         });
       });
@@ -111,15 +120,6 @@ describe('RedisConfigurationStorage', function () {
         });
 
         storage.write('b', 'hello world', _.noop);
-      });
-
-      it('should be able to remove a key', function (f) {
-        storage.write(KEY, VALUE, function(err, value){
-          storage.remove(KEY, function(err){
-            t.strictEqual(err, null);
-            f();
-          });
-        });
       });
     });
 
