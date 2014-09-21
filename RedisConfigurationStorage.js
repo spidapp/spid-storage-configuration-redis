@@ -125,11 +125,9 @@ RedisStorageConfiguration.prototype.onRedisError = function(err){
  */
 RedisStorageConfiguration.prototype.dispose = function (f) {
   if (this._client.connected) {
-    this._listeners = [];
     this._client.quit();
     this._clientSub.quit();
-    f();
-    return;
+    return this.unwatch(null, f);
   }
 
   f(new Error(RedisStorageConfiguration.name + ' was not connected'));
@@ -191,14 +189,14 @@ RedisStorageConfiguration.prototype.watch = function (keys, f) {
 
 /**
  * Unwatch keys
- * @param  {[type]} key [description]
- * @param  {[type]} f   [description]
+ * @param  {[type]} keys [description]
+ * @param  {Function} f(err)
  * @return {[type]}     [description]
  */
 RedisStorageConfiguration.prototype.unwatch = function (keys, f) {
   if(!keys){
     this._listeners = [];
-    return;
+    return f();
   }
 
   var sizeBefore = this._listeners.length;
