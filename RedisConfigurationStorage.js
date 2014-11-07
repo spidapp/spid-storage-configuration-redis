@@ -1,12 +1,12 @@
 'use strict';
 
-var redis                         = require('redis');
-var async                         = require('async');
+var redis = require('redis');
+var async = require('async');
 var ConfigurationStorageInterface = require('spid-storage-configuration-interface');
-var _                             = require('lodash');
+var _ = require('lodash');
 
 function RedisStorageConfiguration() {
-  this._client     = null;
+  this._client = null;
 
   this._publishKey = null;
 
@@ -14,13 +14,13 @@ function RedisStorageConfiguration() {
    * Array of listeners
    * @type {Array} array of object {keys:Array[String], f(key: String, newValue: String):Function}
    */
-  this._listeners  = [];
+  this._listeners = [];
 
   /**
    * Redis client for regular commands
    * @type {RedisClient}
    */
-  this._client     = null;
+  this._client = null;
 
   /**
    * Redis client for subscribing commands
@@ -34,7 +34,7 @@ function RedisStorageConfiguration() {
  * @param  {Function} f(err)
  */
 RedisStorageConfiguration.prototype.init = function (configuration, f) {
-
+  console.log('RedisStorageConfiguration::init');
   configuration({
     /**
      * @type {Number} redis port number
@@ -68,13 +68,14 @@ RedisStorageConfiguration.prototype.init = function (configuration, f) {
  * @param {Function}     f(err)
  *
  */
-RedisStorageConfiguration.prototype.applyConfiguration = function(stale, fresh, f){
-  if(stale && this._client){
+RedisStorageConfiguration.prototype.applyConfiguration = function (stale, fresh, f) {
+  console.log(stale, fresh);
+  if (stale && this._client) {
     this._client.quit();
     this._clientSub.quit();
   }
 
-  if(fresh){
+  if (fresh) {
     f = _.once(f); // it can only be called once (either from 'ready', or from 'error')
 
     this._publishKey = fresh.publishKey;
@@ -85,7 +86,7 @@ RedisStorageConfiguration.prototype.applyConfiguration = function(stale, fresh, 
         auth_pass: fresh.password
       };
 
-      this._client    = redis.createClient(fresh.port, fresh.host, options);
+      this._client = redis.createClient(fresh.port, fresh.host, options);
       this._clientSub = redis.createClient(fresh.port, fresh.host, options);
 
       var fDone = _.after(2, f);
@@ -94,14 +95,18 @@ RedisStorageConfiguration.prototype.applyConfiguration = function(stale, fresh, 
 
       // Setup subscriber client
       this._clientSub.on('message', this.parseNotification.bind(this));
-      this._clientSub.once('ready', function(){
+      this._clientSub.once('ready', function () {
         this._clientSub.subscribe(this._publishKey);
         fDone();
       }.bind(this));
 
+      var onError = function (err) {
+        this.onRedisError(err);
+        f(err);
+      }.bind(this);
 
-      this._client.on('error', _.compose(f, this.onRedisError.bind(this)));
-      this._clientSub.on('error', _.compose(f, this.onRedisError.bind(this)));
+      this._client.on('error', onError);
+      this._clientSub.on('error', onError);
     } catch (e) {
       f(e);
     }
@@ -112,7 +117,7 @@ RedisStorageConfiguration.prototype.applyConfiguration = function(stale, fresh, 
   f();
 };
 
-RedisStorageConfiguration.prototype.onRedisError = function(err){
+RedisStorageConfiguration.prototype.onRedisError = function (err) {
   console.log(err);
   // what should we do in case of redis error ?
   // currently we only print it to the default logger
@@ -157,8 +162,10 @@ RedisStorageConfiguration.prototype.read = function (key, f) {
  * @param  {Function} f(err)
  */
 RedisStorageConfiguration.prototype.write = function (key, value, f) {
-  this._client.set(key, value, function(err){
-    if(err){return f(err);}
+  this._client.set(key, value, function (err) {
+    if (err) {
+      return f(err);
+    }
     this.notifyChange(key, value);
     f(null);
   }.bind(this));
@@ -170,8 +177,10 @@ RedisStorageConfiguration.prototype.write = function (key, value, f) {
  * @param  {Function} f(err)
  */
 RedisStorageConfiguration.prototype.remove = function (key, f) {
-  this._client.del(key, function(err){
-    if(err){return f(err);}
+  this._client.del(key, function (err) {
+    if (err) {
+      return f(err);
+    }
     this.notifyChange(key, null);
     f(null);
   }.bind(this));
@@ -184,7 +193,10 @@ RedisStorageConfiguration.prototype.remove = function (key, f) {
  * @param {Function} f(key: String, newValue: String)
  */
 RedisStorageConfiguration.prototype.watch = function (keys, f) {
-  this._listeners.push({keys: keys, f: f});
+  this._listeners.push({
+    keys: keys,
+    f: f
+  });
 };
 
 /**
@@ -194,40 +206,43 @@ RedisStorageConfiguration.prototype.watch = function (keys, f) {
  * @return {[type]}     [description]
  */
 RedisStorageConfiguration.prototype.unwatch = function (keys, f) {
-  if(!keys){
+  if (!keys) {
     this._listeners = [];
     return f();
   }
 
   var sizeBefore = this._listeners.length;
-  this._listeners = _.remove(this._listeners, function(listener){
+  this._listeners = _.remove(this._listeners, function (listener) {
     return listener.f === f && _.difference(keys, listener.f).length === 0;
   });
   f(sizeBefore - this._listeners.length !== 1 ? new Error('Listener not found') : null);
 };
 
 // Helpers
-RedisStorageConfiguration.prototype.notifyChange = function(key, value){
-  this._client.publish(this._publishKey, JSON.stringify([{key: key, value: value}]));
+RedisStorageConfiguration.prototype.notifyChange = function (key, value) {
+  this._client.publish(this._publishKey, JSON.stringify([{
+    key: key,
+    value: value
+  }]));
 };
 
-RedisStorageConfiguration.prototype.parseNotification = function(channel, message){
+RedisStorageConfiguration.prototype.parseNotification = function (channel, message) {
   var changes;
-  try{
+  try {
     changes = JSON.parse(message);
-  }catch(err){
+  } catch (err) {
     console.error('Invalid Message: ' + message);
     return;
   }
 
-  changes.forEach(function(change){
+  changes.forEach(function (change) {
     this.changeNotification(change.key, change.value);
   }.bind(this));
 };
 
-RedisStorageConfiguration.prototype.changeNotification = function(key, value){
-  this._listeners.forEach(function(listener){
-    if(listener.keys.indexOf(key) === -1){
+RedisStorageConfiguration.prototype.changeNotification = function (key, value) {
+  this._listeners.forEach(function (listener) {
+    if (listener.keys.indexOf(key) === -1) {
       return; // skip
     }
 
