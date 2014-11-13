@@ -31,6 +31,7 @@ function RedisStorageConfiguration() {
 
 /**
  * [init description]
+ * @param  {Object}  configuration  base configuration
  * @param  {Function} f(err)
  */
 RedisStorageConfiguration.prototype.init = function (configuration, f) {
@@ -132,7 +133,7 @@ RedisStorageConfiguration.prototype.dispose = function (f) {
   if (this._client.connected) {
     this._client.quit();
     this._clientSub.quit();
-    return this.unwatch(null, f);
+    return this.unwatch(null, null, f);
   }
 
   f(new Error(RedisStorageConfiguration.name + ' was not connected'));
@@ -140,48 +141,66 @@ RedisStorageConfiguration.prototype.dispose = function (f) {
 
 /**
  * [read description]
- * @param  {[type]} key  [description]
- * @param  {[type]} value [description]
- * @param  {Function} f(err, value)
+ * @param  {String}  prefix
+ * @param  {Array[String]} keys  [key1, key2, ...]
+ * @param  {Function} f(err, properties) e.g. {key1: value1, key2: value2, ...}
  */
-RedisStorageConfiguration.prototype.read = function (key, f) {
-  this._client.get(key, function (err, reply) {
+RedisStorageConfiguration.prototype.read = function (prefix, keys, f) {
+
+  var prefixedKeys = withPrefix(keys, prefix);
+
+  // @todo: use mget
+  this._client.mget(prefixedKeys, function (err, reply) {
     if (err) {
       f(err);
       return;
     }
 
-    f(null, reply);
+    var properties = _.reduce(prefixedKeys, function (properties, key, index) {
+      properties[keys[index]] = reply[index] ? reply[index] : null;
+      return properties;
+    }, {});
+
+    f(null, properties);
   }.bind(this));
 };
 
 /**
  * [write description]
- * @param  {[type]} key  [description]
- * @param  {[type]} value [description]
+ * @param  {String} prefix  [description]
+ * @param  {Object} properties e.g. {key1: value1, key2: value2}
  * @param  {Function} f(err)
  */
-RedisStorageConfiguration.prototype.write = function (key, value, f) {
-  this._client.set(key, value, function (err) {
+RedisStorageConfiguration.prototype.write = function (prefix, properties, f) {
+
+  this._client.mset(propertiesToArrayWithPrefix(prefix, properties), function (err) {
     if (err) {
       return f(err);
     }
-    this.notifyChange(key, value);
+    this.notifyChange(prefix, properties);
     f(null);
   }.bind(this));
 };
 
 /**
  * [write description]
- * @param  {[type]} key  [description]
+ * @param  {String} prefix  [description]
+ * @param  {Array[String]}  keys  keys to delete
  * @param  {Function} f(err)
  */
-RedisStorageConfiguration.prototype.remove = function (key, f) {
-  this._client.del(key, function (err) {
+RedisStorageConfiguration.prototype.remove = function (prefix, keys, f) {
+  this._client.del(withPrefix(keys, prefix), function (err) {
     if (err) {
       return f(err);
     }
-    this.notifyChange(key, null);
+
+    var undefinedProperties = _.reduce(keys, function (undefinedProperties, key) {
+      undefinedProperties[key] = null;
+      return undefinedProperties;
+    }, {});
+
+    // @FIXME: if we notify an undefined property, the object undefinedProperties will drop the key, hence lose the notification for this key
+    this.notifyChange(prefix, undefinedProperties);
     f(null);
   }.bind(this));
 };
@@ -189,23 +208,24 @@ RedisStorageConfiguration.prototype.remove = function (key, f) {
 
 /**
  * Watch keys for change
+ * @param {String} prefix
  * @param {Array[String]} keys array of keys to watch
- * @param {Function} f(key: String, newValue: String)
+ * @param {Function} f(updatedProperties)
  */
-RedisStorageConfiguration.prototype.watch = function (keys, f) {
+RedisStorageConfiguration.prototype.watch = function (prefix, keys, f) {
   this._listeners.push({
-    keys: keys,
+    keys: withPrefixAsObject(keys, prefix),
     f: f
   });
 };
 
 /**
  * Unwatch keys
- * @param  {[type]} keys [description]
+ * @param  {String} prefix [description]
+ * @param  {Array[String]} keys array of keys to unwatch
  * @param  {Function} f(err)
- * @return {[type]}     [description]
  */
-RedisStorageConfiguration.prototype.unwatch = function (keys, f) {
+RedisStorageConfiguration.prototype.unwatch = function (prefix, keys, f) {
   if (!keys) {
     this._listeners = [];
     return f();
@@ -219,11 +239,8 @@ RedisStorageConfiguration.prototype.unwatch = function (keys, f) {
 };
 
 // Helpers
-RedisStorageConfiguration.prototype.notifyChange = function (key, value) {
-  this._client.publish(this._publishKey, JSON.stringify([{
-    key: key,
-    value: value
-  }]));
+RedisStorageConfiguration.prototype.notifyChange = function (prefix, properties) {
+  this._client.publish(this._publishKey, JSON.stringify({'prefix': prefix, 'properties': properties}));
 };
 
 RedisStorageConfiguration.prototype.parseNotification = function (channel, message) {
@@ -235,20 +252,75 @@ RedisStorageConfiguration.prototype.parseNotification = function (channel, messa
     return;
   }
 
-  changes.forEach(function (change) {
-    this.changeNotification(change.key, change.value);
-  }.bind(this));
+  this.changeNotification(changes.prefix, changes.properties);
 };
 
-RedisStorageConfiguration.prototype.changeNotification = function (key, value) {
+RedisStorageConfiguration.prototype.changeNotification = function (prefix, properties) {
+  var prefixedKeys = withPrefix(_.keys(properties), prefix);
   this._listeners.forEach(function (listener) {
-    if (listener.keys.indexOf(key) === -1) {
+    // diff({c, e}, {a, b, c}) -> {e} -> keep ("c" has been updated)
+    // diff({e, d}, {a, b, c}) -> {e, d} -> skip
+    if (_.difference(prefixedKeys, _.keys(listener.keys)).length === prefixedKeys.length) {
       return; // skip
     }
 
-    listener.f(key, value);
+    // Take the following example :
+    // diff({c, e}, {a, b, c}) -> {e} -> keep ("c" has been updated)
+    // we don't want to call the listener with the "e" key/value, we just want to forward
+    // "c" key/value.
+
+    var propertiesForCurrentListener = _.intersection(prefixedKeys, _.keys(listener.keys)).reduce(function (fresh, prefixedKey) {
+      fresh[listener.keys[prefixedKey]] = properties[listener.keys[prefixedKey]];
+      return fresh;
+    }, {});
+
+    listener.f(propertiesForCurrentListener);
   });
 };
 
+/**
+ * Convert properties object to array for mset
+ * e.g. {key1: value1, key2: value2} to [prefixedKey1, value1, prefixedKey2, value2]
+ * @param prefix
+ * @param properties
+ * @returns {*}
+ */
+function propertiesToArrayWithPrefix(prefix, properties) {
+
+  return _.reduce(properties, function (propertiesArray, value, key) {
+    propertiesArray.push(withPrefix(key, prefix));
+    propertiesArray.push(value);
+    return propertiesArray;
+  }, []);
+}
+
+/**
+ * @param  {String|Array[String]} keys
+ * @param  {String} prefix
+ * @return {String|Array[String]}
+ */
+function withPrefix(keys, prefix) {
+  if (_.isString(keys)) {
+    return addPrefix(prefix, keys);
+  }
+
+  return keys.map(_.partial(addPrefix, prefix));
+}
+
+function addPrefix(prefix, key) {
+  return prefix + '.' + key;
+}
+
+/**
+ * @param  {Array[String]} keys
+ * @param  {String} prefix
+ * @return {Object}        e.g. {prefixedKey : rawKeyName, prefixedKey2 : rawKeyName2}
+ */
+function withPrefixAsObject(keys, prefix) {
+  return keys.reduce(function (obj, key) {
+    obj[addPrefix(prefix, key)] = key;
+    return obj;
+  }, {});
+}
 
 module.exports = ConfigurationStorageInterface.ensureImplements(RedisStorageConfiguration);
