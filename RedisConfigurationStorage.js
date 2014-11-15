@@ -35,7 +35,6 @@ function RedisStorageConfiguration() {
  * @param  {Function} f(err)
  */
 RedisStorageConfiguration.prototype.init = function (configuration, f) {
-  console.log('RedisStorageConfiguration::init');
   configuration({
     /**
      * @type {Number} redis port number
@@ -70,7 +69,6 @@ RedisStorageConfiguration.prototype.init = function (configuration, f) {
  *
  */
 RedisStorageConfiguration.prototype.applyConfiguration = function (stale, fresh, f) {
-  console.log(stale, fresh);
   if (stale && this._client) {
     this._client.quit();
     this._clientSub.quit();
@@ -101,13 +99,8 @@ RedisStorageConfiguration.prototype.applyConfiguration = function (stale, fresh,
         fDone();
       }.bind(this));
 
-      var onError = function (err) {
-        this.onRedisError(err);
-        f(err);
-      }.bind(this);
-
-      this._client.on('error', onError);
-      this._clientSub.on('error', onError);
+      this._client.on('error', _.partialRight(onRedisError, f));
+      this._clientSub.on('error', _.partialRight(onRedisError, f));
     } catch (e) {
       f(e);
     }
@@ -118,12 +111,6 @@ RedisStorageConfiguration.prototype.applyConfiguration = function (stale, fresh,
   f();
 };
 
-RedisStorageConfiguration.prototype.onRedisError = function (err) {
-  console.log(err);
-  // what should we do in case of redis error ?
-  // currently we only print it to the default logger
-  return err;
-};
 
 /**
  * [dispose description]
@@ -146,10 +133,8 @@ RedisStorageConfiguration.prototype.dispose = function (f) {
  * @param  {Function} f(err, properties) e.g. {key1: value1, key2: value2, ...}
  */
 RedisStorageConfiguration.prototype.read = function (prefix, keys, f) {
-
   var prefixedKeys = withPrefix(keys, prefix);
 
-  // @todo: use mget
   this._client.mget(prefixedKeys, function (err, reply) {
     if (err) {
       f(err);
@@ -172,7 +157,6 @@ RedisStorageConfiguration.prototype.read = function (prefix, keys, f) {
  * @param  {Function} f(err)
  */
 RedisStorageConfiguration.prototype.write = function (prefix, properties, f) {
-
   this._client.mset(propertiesToArrayWithPrefix(prefix, properties), function (err) {
     if (err) {
       return f(err);
@@ -240,7 +224,10 @@ RedisStorageConfiguration.prototype.unwatch = function (prefix, keys, f) {
 
 // Helpers
 RedisStorageConfiguration.prototype.notifyChange = function (prefix, properties) {
-  this._client.publish(this._publishKey, JSON.stringify({'prefix': prefix, 'properties': properties}));
+  this._client.publish(this._publishKey, JSON.stringify({
+    'prefix': prefix,
+    'properties': properties
+  }));
 };
 
 RedisStorageConfiguration.prototype.parseNotification = function (channel, message) {
@@ -292,6 +279,18 @@ function propertiesToArrayWithPrefix(prefix, properties) {
     propertiesArray.push(value);
     return propertiesArray;
   }, []);
+}
+
+/**
+ * @param  {Error} err
+ * @param  {Function} f(err)
+ */
+function onRedisError(err, f) {
+  // what should we do in case of redis error ?
+  // currently we print it to the default logger
+  console.log(err);
+  // and forward it to f
+  f(err);
 }
 
 /**
